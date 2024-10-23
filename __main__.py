@@ -2,10 +2,11 @@
 import pygame
 import pymunk
 import pymunk.pygame_util
+import pymunk.constraints
 import math
-import numpy as np
-import scipy.integrate as spi
-import scipy.integrate as odeint
+#import numpy as np
+#import scipy.integrate as spi
+#import scipy.integrate as odeint
 
 # current problems 10/18
 # idk how accurate to real life, units may be issue, force applications seem to stack
@@ -34,6 +35,38 @@ running = True
 space = pymunk.Space()
 space.gravity = (0,0)
 
+
+class PIDController:
+    def __init__(self, kp, ki, kd, setpoint):
+        # PID coefficients
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self.setpoint = setpoint  # Desired value (angular or linear velocity)
+
+        # State variables
+        self.integral = 0.0
+        self.previous_error = 0.0
+
+    def update(self, current_value, dt):
+        # Error calculation
+        error = self.setpoint - current_value
+
+        # Update integral term
+        self.integral += error * dt
+
+        # Derivative term (rate of change of error)
+        derivative = (error - self.previous_error) / dt if dt > 0 else 0.0
+
+        # PID output
+        output = self.kp * error + self.ki * self.integral + self.kd * derivative
+
+        # Update previous error
+        self.previous_error = error
+
+        # Return PID output
+        return output
+
 # Maybe make a class?
 # Create a simple robot body (a rectangle)
 class falinks(object):
@@ -48,6 +81,7 @@ class falinks(object):
         self.shape = pymunk.Poly.create_box(self.body, self.size)
         self.shape.elasticity = 0.5
         space.add(self.body, self.shape)
+
 
         # Sensors
         self.magnet_radius = 10
@@ -85,97 +119,79 @@ def dirValue(number):
     else:
         return -1
 
-# PROBABLY CHANGE TO GOAL FOR ANGULAR VELOCITY
-def translationalPID(object, goalVel, time, prevError, integral):
-    kP, kI, kD = 0.35, 0.001, 0.3
-
-    error = goalVel - object.body.velocity.length
-    pOut = kP * error
-    
-    integral += error * (pygame.time.get_ticks()/1000 - time)
-    iOut = kI * integral
-
-    derivative = (error - prevError) / ((pygame.time.get_ticks()/1000 - time))
-    dOut = kD * derivative
-
-    output = pOut + iOut + dOut
-
-    return output, error, integral
-
-def rotationalPID(object, goalVel, time, prevError, integral):
-    kP, kD = 0.05, 0.3
-
-    error = goalVel - object.body.angular_velocity
-    pOut = kP * error
-    
-    derivative = (error - prevError) / ((pygame.time.get_ticks()/1000 - time))
-    dOut = kD * derivative
-
-    output = pOut + dOut
-
-    return output, error, integral
+def magForce(BodyA, BodyB):
+    print("")
 
 # Just using a specific function so that I don't have to pass over values that will be the same every time
 # need to figure out how to measure time difference
 def falinksBehavior(objects, time):
-    rTError = 0
-    lTError = 0
-    rTIntegral = 0
-    lTIntegral = 0
+    velocityPID = PIDController(kp=0.1, ki=0.01, kd=0.05, setpoint=100)
+    angularPID = PIDController(kp=0.2, ki=0.02, kd=0.08, setpoint=10)
 
-    rRError = 0
-    lRError = 0
-    rRIntegral = 0
-    lRIntegral = 0
+    currV = 0
+    currA = 0
+
     for n in range(len(objects)):
+        Rl = (75 - objects[n].size[1]/2)
+        Rr = (75 + objects[n].size[1]/2)
+
+        prev_force_move_r = 0
+        prev_force_move_l = 0
         # Movement PID and stuff like that
-        rTFE = translationalPID(objects[n], 20, time, rTError, rTIntegral)
-        rTError = rTFE[1]
-        rTIntegral = rTFE[2]
-        lTFE = translationalPID(objects[n], 20*0.9, time, lTError, lTIntegral)
-        lTError = lTFE[1]
-        lTIntegral = lTFE[2]
 
         # Rotational PID
-        rRFE = rotationalPID(objects[n], (objects[n].size[1]/2)*(20-20*0.9), time, rRError, rRIntegral)
-        rRError = rRFE[1]
-        rRIntegral = rRFE[2]
+        #rRFE = rotationalPID(objects[n], 0, time, rRError, rRIntegral)
+        #rRError = rRFE[1]
+        #rRIntegral = rRFE[2]
         #lRFE = rotationalPID(objects[n], 10*dirValue(objects[n].body.angular_velocity), time, lRError, lRIntegral)
         #lRError = lRFE[1]
         #lRIntegral = lRFE[2]
 
-        #print(rFE[0])
-        #print(lFE[0])
+        # THIS SHIT IS CORRECT, I JUST NEED TO FIGURE OUT HOW TO APPLY FORCES NOW ALSO SO I CAN DO MAGNETS
+        # MIGHT NEED TO RECREATE THIS SHIT WITH FORCES?
+        vRight = 255
+        vLeft = 0.87 * vRight
 
-        # translational movement forces
-        objects[n].body.apply_force_at_local_point((rTFE[0]*objects[n].size[1]/2, 0), (0, objects[n].size[1]/2))
-        objects[n].body.apply_force_at_local_point((lTFE[0]*objects[n].size[1]/2, 0), (0, -objects[n].size[1]/2))
+        translationalVel = (vLeft + vRight) /2
+        rotationalVel = (vRight-vLeft) / 2
 
-        # rotational movement forces
-        #objects[n].body.angular_velocity = rRFE[0]
+        currentRightVel = objects[n].body.velocity.length + (objects[n].body.angular_velocity * objects[n].size[1]/2)
+        currentLeftVel = objects[n].body.velocity.length - (objects[n].body.angular_velocity * objects[n].size[1]/2)
+
+        right_translationalAccel = (vRight-currentRightVel) / time
+        left_translationalAccel = (vLeft-currentLeftVel) / time
+
+        velocityAccel = velocityPID.update(objects[n].body.velocity.length, time)
+        objects[n].body.velocity += (math.cos(objects[n].body.angle)*velocityAccel * time, math.sin(objects[n].body.angle)*velocityAccel * time)
+        angularAccel = angularPID.update(objects[n].body.angular_velocity, time)
+        objects[n].body.angular_velocity += angularAccel * time
+
+        #objects[n].body.velocity = translationalVel*math.cos(objects[n].body.angle), translationalVel*math.sin(objects[n].body.angle)
+        #objects[n].body.angular_velocity = rotationalVel
 
 
-        #print(objects[n].body.angular_velocity)
+        Fl = currV - angularAccel
+        Fr = currV + angularAccel
 
-        # max speed
-        #maxVelocity = 25.5
-        #maxAngVelocity = maxVelocity * (abs(rFE[0]-lFE[0])/(rFE[0]+lFE[0]))
-        #print(objects[n].body.angular_velocity)
-        
-        #if objects[n].body.velocity.length > maxVelocity:
-            #objects[n].body.velocity = objects[n].body.velocity * (maxVelocity/objects[n].body.velocity.length)
-        
-        #if abs(objects[n].body.angular_velocity) > maxAngVelocity:
-            #objects[n].body.angular_velocity = objects[n].body.angular_velocity * abs(maxAngVelocity/objects[n].body.angular_velocity)
+        objects[n].body.apply_force_at_local_point((Fr, 0), (0, objects[n].size[1]/2))
+        objects[n].body.apply_force_at_local_point((Fl, 0), (0, -objects[n].size[1]/2))
 
-        # need to determine how to actually calc friction 
-        # friction forces 
+        print(Fr)
+
+        '''
+        friction_force_mag_side = 0.4 * 9.81 * objects[n].mass
+        friction_force_mag_wheel = 0.1 * 9.81 * objects[n].mass
+        friction_force_x = (-friction_force_mag_side * abs(objects[n].body.velocity[0])*math.copysign(1, objects[n].body.velocity[0]))
+        friction_force_y = (-friction_force_mag_wheel * abs(objects[n].body.velocity[1])*math.copysign(1, objects[n].body.velocity[1]))
+        objects[n].body.apply_force_at_world_point((friction_force_x, friction_force_y), objects[n].body.position)
+        '''
 
         # take angel of body
         # apply magnitudes of x and y frictions forces at both wheels
         # they share direction and magnitude
         # Cr dir = at wheles, flipp of 'y' direction on body
         # MUs dir = at wheels, flip of 'x' direction on body
+        '''
         Cr = 0.02
         MUs = 0.4
         if objects[n].body.angle > 90:
@@ -185,9 +201,7 @@ def falinksBehavior(objects, time):
         else:
             objects[n].body.apply_force_at_local_point((-Cr, -MUs), (0, objects[n].size[1]/2))
             objects[n].body.apply_force_at_local_point((-Cr, -MUs), (0, -objects[n].size[1]/2))
-
-
-        print(objects[n].body.velocity)
+        '''
 
         # magnet connectionsC:w
         # 1. check what poles are interacting b/t two objects
@@ -196,74 +210,10 @@ def falinksBehavior(objects, time):
         # 4. try to figure wtf to do for disconnection
 
         # DID WRONG JUST APPLYING FORCE TO NORMAL OF THE BODY when it should be towards other body, AND NOT WORKINGw
-        '''
         mag_force = 1000
         for i in range(len(objects)):
             if n != i:
-                if abs(objects[n].southPos()[0]-objects[i].southPos()[0]) < objects[n].south_shape.radius:
-                    if abs(objects[n].southPos()[1]-objects[i].southPos()[1]) < objects[n].south_shape.radius:
-                        i_pos = (objects[i].southPos()[0], objects[i].southPos()[1])
-                        i_angle = objects[i].body.angle
-                        i_direction = pymunk.Vec2d(math.cos(i_angle), math.sin(i_angle))
-
-                        n_pos = (objects[n].southPos()[0], objects[n].southPos()[1])
-                        n_angle = objects[n].body.angle
-                        n_direction = pymunk.Vec2d(math.cos(n_angle), math.sin(n_angle))
-
-                        i_normal = pymunk.Vec2d(((i_pos[0]-n_pos[0])*dirValue(i_pos[0]-n_pos[0]))*i_direction[0], ((i_pos[1]-n_pos[1])*dirValue(i_pos[1]-n_pos[1]))*i_direction[1])
-                        n_normal = pymunk.Vec2d(((n_pos[0]-i_pos[0])*dirValue(n_pos[0]-i_pos[0]))*n_direction[0], ((n_pos[1]-i_pos[1])*dirValue(n_pos[1]-i_pos[1]))*n_direction[1])
-                        objects[n].body.apply_force_at_local_point((n_normal)*mag_force, (0, objects[n].size[1]/2))
-                        objects[i].body.apply_force_at_local_point((i_normal)*mag_force, (0, objects[i].size[1]/2))
-                        print("i normal\n")
-                        print(i_normal)
-                        print("\nn normal\n")
-                        print(n_normal)
-
-                if abs(objects[n].southPos()[0]-objects[i].northPos()[0]) < objects[n].south_shape.radius:
-                    if abs(objects[n].southPos()[1]-objects[i].northPos()[1]) < objects[n].south_shape.radius:
-                        i_pos = (objects[i].northPos()[0], objects[i].northPos()[1])
-                        i_angle = objects[i].body.angle
-                        i_direction = pymunk.Vec2d(math.cos(i_angle), math.sin(i_angle))
-
-                        n_pos = (objects[n].southPos()[0], objects[n].southPos()[1])
-                        n_angle = objects[n].body.angle
-                        n_direction = pymunk.Vec2d(math.cos(n_angle), math.sin(n_angle))
-
-                        i_normal = pymunk.Vec2d(((i_pos[0]-n_pos[0])*dirValue(i_pos[0]-n_pos[0]))*i_direction[0], ((i_pos[1]-n_pos[1])*dirValue(i_pos[1]-n_pos[1]))*i_direction[1])
-                        n_normal = pymunk.Vec2d(((n_pos[0]-i_pos[0])*dirValue(n_pos[0]-i_pos[0]))*n_direction[0], ((n_pos[1]-i_pos[1])*dirValue(n_pos[1]-i_pos[1]))*n_direction[1])
-                        objects[n].body.apply_force_at_local_point(-(n_normal)*mag_force, (0, objects[n].size[1]/2))
-                        objects[i].body.apply_force_at_local_point(-(i_normal)*mag_force, (0, -objects[i].size[1]/2))
-
-                if abs(objects[n].northPos()[0]-objects[i].southPos()[0]) < objects[n].north_shape.radius:
-                    if abs(objects[n].northPos()[1]-objects[i].southPos()[1]) < objects[n].north_shape.radius:
-                        i_pos = (objects[i].southPos()[0], objects[i].southPos()[1])
-                        i_angle = objects[i].body.angle
-                        i_direction = pymunk.Vec2d(math.cos(i_angle), math.sin(i_angle))
-
-                        n_pos = (objects[n].northPos()[0], objects[n].northPos()[1])
-                        n_angle = objects[n].body.angle
-                        n_direction = pymunk.Vec2d(math.cos(n_angle), math.sin(n_angle))
-
-                        i_normal = pymunk.Vec2d(((i_pos[0]-n_pos[0])*dirValue(i_pos[0]-n_pos[0]))*i_direction[0], ((i_pos[1]-n_pos[1])*dirValue(i_pos[1]-n_pos[1]))*i_direction[1])
-                        n_normal = pymunk.Vec2d(((n_pos[0]-i_pos[0])*dirValue(n_pos[0]-i_pos[0]))*n_direction[0], ((n_pos[1]-i_pos[1])*dirValue(n_pos[1]-i_pos[1]))*n_direction[1])
-                        objects[n].body.apply_force_at_local_point(-(n_normal)*mag_force, (0, -objects[n].size[1]/2))
-                        objects[i].body.apply_force_at_local_point(-(i_normal)*mag_force, (0, objects[i].size[1]/2))
-
-                if abs(objects[n].northPos()[0]-objects[i].northPos()[0]) < objects[n].north_shape.radius:
-                    if abs(objects[n].northPos()[1]-objects[i].northPos()[1]) < objects[n].north_shape.radius:
-                        i_pos = (objects[i].northPos()[0], objects[i].northPos()[1])
-                        i_angle = objects[i].body.angle
-                        i_direction = pymunk.Vec2d(math.cos(i_angle), math.sin(i_angle))
-
-                        n_pos = (objects[n].northPos()[0], objects[n].northPos()[1])
-                        n_angle = objects[n].body.angle
-                        n_direction = pymunk.Vec2d(math.cos(n_angle), math.sin(n_angle))
-
-                        i_normal = pymunk.Vec2d(((i_pos[0]-n_pos[0])*dirValue(i_pos[0]-n_pos[0]))*i_direction[0], ((i_pos[1]-n_pos[1])*dirValue(i_pos[1]-n_pos[1]))*i_direction[1])
-                        n_normal = pymunk.Vec2d(((n_pos[0]-i_pos[0])*dirValue(n_pos[0]-i_pos[0]))*n_direction[0], ((n_pos[1]-i_pos[1])*dirValue(n_pos[1]-i_pos[1]))*n_direction[1])
-                        objects[n].body.apply_force_at_local_point((n_normal)*mag_force, (0, -objects[n].size[1]/2))
-                        objects[i].body.apply_force_at_local_point((i_normal)*mag_force, (0, -objects[i].size[1]/2))
-            '''
+                print("temp")
 
         
 
@@ -343,8 +293,9 @@ while running:
     # pygame.QUIT event means the user clicked X to close your window
     for event in pygame.event.get():
         if keys[pygame.K_UP]:
-                objects[n].body.apply_force_at_local_point((10000, 0), (0, objects[n].size[1]/2))
-                objects[n].body.apply_force_at_local_point((9000, 0), (0, -objects[n].size[1]/2))
+                for n in range(len(objects)):
+                    objects[n].body.apply_force_at_local_point((1000, 0), (0, objects[n].size[1]/2))
+                    objects[n].body.apply_force_at_local_point((9000, 0), (0, -objects[n].size[1]/2))
 
         if keys[pygame.K_DOWN]:
             objects.append(falinks(space, (pygame.mouse.get_pos())))
@@ -355,7 +306,8 @@ while running:
         if event.type == pygame.MOUSEBUTTONDOWN:
             mazeCheck(maze, pygame.mouse.get_pos())
 
-    falinksBehavior(objects, prev_time)
+    deltaT = (pygame.time.get_ticks()-prev_time)/1000
+    falinksBehavior(objects, deltaT)
 
     # RENDERS
     screen.fill("white") # White background
