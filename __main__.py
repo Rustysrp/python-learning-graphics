@@ -8,22 +8,20 @@ import math
 #import scipy.integrate as spi
 #import scipy.integrate as odeint
 
-res = (1000, 1000)
-
 # pygame setup
 pygame.init()
-screen = pygame.display.set_mode(res)
+screen = pygame.display.set_mode((1000, 1000))
 clock = pygame.time.Clock()
 running = True
 space = pymunk.Space()
-space.gravity = (0,0)
+space.gravity = (0, 0)
 
 # Maybe make a class?
 # Create a simple robot body (a rectangle)
 class falinks(object):
-
     def __init__(self, space, position, lV, rV):
         # main vars
+        ratio = 1.22857 # Ratio for width:length, 1:1.22857
         self.mass = 23 # need to configure
         self.size = (20, 20*1.22857) # assuming units are mm, these are measured (scale as necessary)
         moment = pymunk.moment_for_box(self.mass, self.size)
@@ -52,34 +50,37 @@ class falinks(object):
         self.Ax = 0 # x velocity
         self.Ay = 0 # y velocity
 
-    def behavior(self, dT):
-        translationalVel = (self.leftVelocity + self.rightVelocity) /2
+    def movement(self, dT):
+        # Calculate the translational and rotational velocities based on the left and right wheel velocities
+        translationalVel = (self.leftVelocity + self.rightVelocity) / 2
         rotationalVel = (self.rightVelocity - self.leftVelocity) / self.size[1]
 
+        # Desired translational velocity for the body
         goalVel = (translationalVel * math.cos(self.body.angle), translationalVel * math.sin(self.body.angle))
 
         # k factor for accel.
-        # kFactor = translationalVel / rotationalVel # This seems like the right value, but makes collisions weird
-        kFactor = 4 # temp while figuring out weird collision stuff
+        kFactor = self.size[1] # Multiplyer value, idk what it should be but it seems this works
 
-        aX = (kFactor*(goalVel[0] - self.body.velocity[0]) - self.body.angular_velocity * self.body.velocity[1]) * dT
-        aY = (kFactor*(goalVel[1] - self.body.velocity[1]) + self.body.angular_velocity * self.body.velocity[0]) * dT
+        # Calculate translational rotation
+        aX = (kFactor * (goalVel[0] - self.body.velocity[0]) - self.body.angular_velocity * self.body.velocity[1]) * dT
+        aY = (kFactor * (goalVel[1] - self.body.velocity[1]) + self.body.angular_velocity * self.body.velocity[0]) * dT
 
-        self.body.angular_velocity += (rotationalVel - self.body.angular_velocity) * dT
-        self.body.velocity += (aX, aY)
+        self.body.angular_velocity += (rotationalVel - self.body.angular_velocity) * dT # Apply angular rotation
+        self.body.velocity += (aX, aY) # Apply translational acceleration
 
-        print(self.body.velocity.length - translationalVel)
+    def magnetForce(dT):
+        return dT # Temporary before working on function
 
+    def behavior(self, dT):
+        self.movement(dT)
+        self.magnetForce(dT)
 
 
 def magForce(BodyA, BodyB):
     print("")
 
-# just temp -> finish later
-def mazeDefine():
-    print("finish")
-
-# turn on and off maze parts
+# Function for turning off and on maze nodes, checking where the mouse position is (called after clicking)
+# Will have to adjust for square nodes
 def mazeCheck(mazeObjects, mousePos):
     for n in range(len(mazeObjects)):
         if mousePos[0] >= mazeObjects[n].offset[0] - mazeObjects[n].radius:
@@ -92,40 +93,37 @@ def mazeCheck(mazeObjects, mousePos):
                         else:
                             mazeObjects[n].color = (255, 100, 0, 10)
 
-# ratio for falinks body ~43mm long 35mm wide: length = 1.22857 * width
-#misc variables
-# Some lists for storing behavior and data
-objects = []
 
-# Maze generation
-# Make into callable function
-mazeDimension = 800
-baseX = 100
-baseY = 100
-nem = 10
-maze = []
-b = -0.5
+# Maze generation -> Maybe make into callable function later on but prob. isn't necessary
+mazeDimension = 800 # How big the square will be (maze)
+mazePoint = (100, 100) # Initial position, top left of maze
+nem = 10 # Side number of maze nodes (ttl # of maze nodes = nem*nem)
+maze = [] # Initialize maze object list
+spacing = -0.5 # Initial spacing of the nodes to make even distribution
 for n in range(nem*nem):
     if (n%nem) == 0:
-        b = b + 1
-    maze.append(pymunk.Circle(space.static_body, 10, (baseX+(n%nem+0.5)*(mazeDimension/nem), baseY+b*(mazeDimension/nem))))
+        spacing = spacing + 1
+    maze.append(pymunk.Circle(space.static_body, 10, (mazePoint[0]+(n%nem+0.5)*(mazeDimension/nem), mazePoint[1]+spacing*(mazeDimension/nem))))
+    # Some maze aspects
     maze[n].dampening = 0.9
     maze[n].sensor = True
-    maze[n].color = (100, 255, 0, 10)
-    space.add(maze[n])
+    maze[n].color = (100, 255, 0, 10) # Initialize the default colors for disable nodes
+    space.add(maze[n]) # Add the maze to the space
 
-points = [(baseX, baseY), (baseX+mazeDimension, baseY), (baseX+mazeDimension, baseY+mazeDimension), (baseX, baseY+mazeDimension)]
-for i in range(len(points)):
+# Top left of the box to encapsulate objects
+points = [(mazePoint[0], mazePoint[1]), (mazePoint[0]+mazeDimension, mazePoint[0]), (mazePoint[0]+mazeDimension, mazePoint[1]+mazeDimension), (mazePoint[0], mazePoint[1]+mazeDimension)] # Corner points
+for i in range(len(points)): # Generate the segments
     seg = pymunk.Segment(space.static_body, points[i], points[(i+1)%4], 2)
     seg.elasticity = 0.9
-    space.add(seg)
+    space.add(seg) # Add the segments
 
-# MAIN LOOP
-draw_options = pymunk.pygame_util.DrawOptions(screen)
-prev_time = 0
+# Set some variables
+dT = 0 # Initialize timestep variable
+objects = [] # Initialize object list
 
+# Main loop
 while running:
-    # Event processing
+    # PROCESS EVENTS
     keys = pygame.key.get_pressed() # Keep track of what keys are pressed
     for event in pygame.event.get():
         if keys[pygame.K_DOWN]:
@@ -137,24 +135,20 @@ while running:
         if event.type == pygame.QUIT:
             running = False
 
-
-    # Update object physics
-    dT = (pygame.time.get_ticks()/1000-prev_time) # Calculate the difference in time between iterations
+    # UPDATE OBJECT PHYSICS
     for n in range(len(objects)):
-        objects[n].behavior(dT) # Pass over dT for updating object behavior / physics
+        objects[n].behavior(pygame.time.get_ticks()/1000 - dT) # Pass over dT for updating object behavior / physics
 
-    # GONNA NEED TO DO THAT TIMESTEP THING SINCE ADDING TOO MANY OBJECTS MESSES UP FRAMERATE (& PHYSICS)
+    # GONNA NEED TO DO THAT TIMESTEP THING SINCE ADDING TOO MANY OBJECTS MESSES UP FRAMERATE (& THEREFORE PHYSICS)
 
     # RENDERS
     screen.fill("white") # White background
-    space.debug_draw(draw_options)
+    space.debug_draw(pymunk.pygame_util.DrawOptions(screen)) # Draw the pymunk space
+    pygame.display.flip() # Display the program
 
-    # Display program
-    pygame.display.flip()
-
-    # UPDATE PHYSICS
-    prev_time = pygame.time.get_ticks()/1000
-    space.step(1/60.0)
+    # UPDATE PHYSICS VARIABLES
+    dT = pygame.time.get_ticks()/1000 # Record what the previous time will be to calculate dT for physics
+    space.step(1/60.0) # Step the pymunk space 
     clock.tick(60)  # Limits FPS to 60
 
 pygame.quit()
