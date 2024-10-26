@@ -8,23 +8,6 @@ import math
 #import scipy.integrate as spi
 #import scipy.integrate as odeint
 
-# current problems 10/18
-# idk how accurate to real life, units may be issue, force applications seem to stack
-# need to implement 'sensors' (or what they essentially do)
-# idk how to hard-implement bodies, or make them exert forces on each other
-
-# idea -> basically open space
-# buttons to generate bodies, or placable
-# changable maze (adjustable fidelity and spaces) -> needs to have collision but not move
-# adjustable robot properties and behavior
-# flexible for future projects
-# output data (personal, do last)
-
-
-
-
-
-dt = 0
 res = (1000, 1000)
 
 # pygame setup
@@ -35,43 +18,11 @@ running = True
 space = pymunk.Space()
 space.gravity = (0,0)
 
-
-class PIDController:
-    def __init__(self, kp, ki, kd, setpoint):
-        # PID coefficients
-        self.kp = kp
-        self.ki = ki
-        self.kd = kd
-        self.setpoint = setpoint  # Desired value (angular or linear velocity)
-
-        # State variables
-        self.integral = 0.0
-        self.previous_error = 0.0
-
-    def update(self, current_value, dt):
-        # Error calculation
-        error = self.setpoint - current_value
-
-        # Update integral term
-        self.integral += error * dt
-
-        # Derivative term (rate of change of error)
-        derivative = (error - self.previous_error) / dt if dt > 0 else 0.0
-
-        # PID output
-        output = self.kp * error + self.ki * self.integral + self.kd * derivative
-
-        # Update previous error
-        self.previous_error = error
-
-        # Return PID output
-        return output
-
 # Maybe make a class?
 # Create a simple robot body (a rectangle)
 class falinks(object):
 
-    def __init__(self, space, position):
+    def __init__(self, space, position, lV, rV):
         # main vars
         self.mass = 23 # need to configure
         self.size = (20, 20*1.22857) # assuming units are mm, these are measured (scale as necessary)
@@ -82,6 +33,9 @@ class falinks(object):
         self.shape.elasticity = 0.5
         space.add(self.body, self.shape)
 
+        # Velocity
+        self.leftVelocity = lV
+        self.rightVelocity = rV
 
         # Sensors
         self.magnet_radius = 10
@@ -98,137 +52,30 @@ class falinks(object):
         self.Ax = 0 # x velocity
         self.Ay = 0 # y velocity
 
-    def southPos(self):
-        return self.south_shape.body.position
+    def behavior(self, dT):
+        translationalVel = (self.leftVelocity + self.rightVelocity) /2
+        rotationalVel = (self.rightVelocity - self.leftVelocity) / self.size[1]
 
-    def northPos(self):
-        return self.north_shape.body.position
+        goalVel = (translationalVel * math.cos(self.body.angle), translationalVel * math.sin(self.body.angle))
+
+        # k factor for accel.
+        # kFactor = translationalVel / rotationalVel # This seems like the right value, but makes collisions weird
+        kFactor = 4 # temp while figuring out weird collision stuff
+
+        aX = (kFactor*(goalVel[0] - self.body.velocity[0]) - self.body.angular_velocity * self.body.velocity[1]) * dT
+        aY = (kFactor*(goalVel[1] - self.body.velocity[1]) + self.body.angular_velocity * self.body.velocity[0]) * dT
+
+        self.body.angular_velocity += (rotationalVel - self.body.angular_velocity) * dT
+        self.body.velocity += (aX, aY)
+
+        print(self.body.velocity.length - translationalVel)
 
 
-    # set max, pass in % ?
-    def velocityCalc(self, time, frequency):
-        # frame time -> treat as degrees, convert to radians -> make sure it reaches full range
-        # pass in frequency, which is a 'randomly' set number, specific to each own object
-        return 2000*math.sin(frequency*time) # supposed to return the 'velocity'
-
-def dirValue(number):
-    if number == 0:
-        return 1
-    if number > 0:
-        return 1
-    else:
-        return -1
 
 def magForce(BodyA, BodyB):
     print("")
 
-# Just using a specific function so that I don't have to pass over values that will be the same every time
-# need to figure out how to measure time difference
-def falinksBehavior(objects, time):
-    velocityPID = PIDController(kp=0.1, ki=0.01, kd=0.05, setpoint=100)
-    angularPID = PIDController(kp=0.2, ki=0.02, kd=0.08, setpoint=10)
-
-    currV = 0
-    currA = 0
-
-    for n in range(len(objects)):
-        Rl = (75 - objects[n].size[1]/2)
-        Rr = (75 + objects[n].size[1]/2)
-
-        prev_force_move_r = 0
-        prev_force_move_l = 0
-        # Movement PID and stuff like that
-
-        # Rotational PID
-        #rRFE = rotationalPID(objects[n], 0, time, rRError, rRIntegral)
-        #rRError = rRFE[1]
-        #rRIntegral = rRFE[2]
-        #lRFE = rotationalPID(objects[n], 10*dirValue(objects[n].body.angular_velocity), time, lRError, lRIntegral)
-        #lRError = lRFE[1]
-        #lRIntegral = lRFE[2]
-
-        # THIS SHIT IS CORRECT, I JUST NEED TO FIGURE OUT HOW TO APPLY FORCES NOW ALSO SO I CAN DO MAGNETS
-        # MIGHT NEED TO RECREATE THIS SHIT WITH FORCES?
-        vRight = 255
-        vLeft = 0.87 * vRight
-
-        translationalVel = (vLeft + vRight) /2
-        rotationalVel = (vRight-vLeft) / 2
-
-        currentRightVel = objects[n].body.velocity.length + (objects[n].body.angular_velocity * objects[n].size[1]/2)
-        currentLeftVel = objects[n].body.velocity.length - (objects[n].body.angular_velocity * objects[n].size[1]/2)
-
-        right_translationalAccel = (vRight-currentRightVel) / time
-        left_translationalAccel = (vLeft-currentLeftVel) / time
-
-        velocityAccel = velocityPID.update(objects[n].body.velocity.length, time)
-        objects[n].body.velocity += (math.cos(objects[n].body.angle)*velocityAccel * time, math.sin(objects[n].body.angle)*velocityAccel * time)
-        angularAccel = angularPID.update(objects[n].body.angular_velocity, time)
-        objects[n].body.angular_velocity += angularAccel * time
-
-        #objects[n].body.velocity = translationalVel*math.cos(objects[n].body.angle), translationalVel*math.sin(objects[n].body.angle)
-        #objects[n].body.angular_velocity = rotationalVel
-
-
-        Fl = currV - angularAccel
-        Fr = currV + angularAccel
-
-        objects[n].body.apply_force_at_local_point((Fr, 0), (0, objects[n].size[1]/2))
-        objects[n].body.apply_force_at_local_point((Fl, 0), (0, -objects[n].size[1]/2))
-
-        print(Fr)
-
-        '''
-        friction_force_mag_side = 0.4 * 9.81 * objects[n].mass
-        friction_force_mag_wheel = 0.1 * 9.81 * objects[n].mass
-        friction_force_x = (-friction_force_mag_side * abs(objects[n].body.velocity[0])*math.copysign(1, objects[n].body.velocity[0]))
-        friction_force_y = (-friction_force_mag_wheel * abs(objects[n].body.velocity[1])*math.copysign(1, objects[n].body.velocity[1]))
-        objects[n].body.apply_force_at_world_point((friction_force_x, friction_force_y), objects[n].body.position)
-        '''
-
-        # take angel of body
-        # apply magnitudes of x and y frictions forces at both wheels
-        # they share direction and magnitude
-        # Cr dir = at wheles, flipp of 'y' direction on body
-        # MUs dir = at wheels, flip of 'x' direction on body
-        '''
-        Cr = 0.02
-        MUs = 0.4
-        if objects[n].body.angle > 90:
-            if objects[n].body.angle < 270:
-                objects[n].body.apply_force_at_local_point((-Cr, MUs), (0, objects[n].size[1]/2))
-                objects[n].body.apply_force_at_local_point((-Cr, MUs), (0, -objects[n].size[1]/2))
-        else:
-            objects[n].body.apply_force_at_local_point((-Cr, -MUs), (0, objects[n].size[1]/2))
-            objects[n].body.apply_force_at_local_point((-Cr, -MUs), (0, -objects[n].size[1]/2))
-        '''
-
-        # magnet connectionsC:w
-        # 1. check what poles are interacting b/t two objects
-        # 2. identify if pushing / pulling, and make vector normal to the side's orientation
-        # 3. apply each other's normal vector direction * direction (+/-) * magnet strength
-        # 4. try to figure wtf to do for disconnection
-
-        # DID WRONG JUST APPLYING FORCE TO NORMAL OF THE BODY when it should be towards other body, AND NOT WORKINGw
-        mag_force = 1000
-        for i in range(len(objects)):
-            if n != i:
-                print("temp")
-
-        
-
-
-
-def updateMovement(objects):
-    for x in objects:
-        x.body.apply_force_at_local_point((0, -10000), (0, 0))
-
-# just a test
-def applyGrav(objects):
-    for x in objects:
-        x.body.apply_force_at_local_point((0, (x.mass*500)), (0, 10))
-        x.body.apply_force_at_local_point((0, (x.mass*500)), (0, -10))
-
+# just temp -> finish later
 def mazeDefine():
     print("finish")
 
@@ -247,13 +94,10 @@ def mazeCheck(mazeObjects, mousePos):
 
 # ratio for falinks body ~43mm long 35mm wide: length = 1.22857 * width
 #misc variables
-rect_size = 400
-
 # Some lists for storing behavior and data
 objects = []
 
-# create main test area
-
+# Maze generation
 # Make into callable function
 mazeDimension = 800
 baseX = 100
@@ -270,7 +114,6 @@ for n in range(nem*nem):
     maze[n].color = (100, 255, 0, 10)
     space.add(maze[n])
 
-
 points = [(baseX, baseY), (baseX+mazeDimension, baseY), (baseX+mazeDimension, baseY+mazeDimension), (baseX, baseY+mazeDimension)]
 for i in range(len(points)):
     seg = pymunk.Segment(space.static_body, points[i], points[(i+1)%4], 2)
@@ -278,36 +121,29 @@ for i in range(len(points)):
     space.add(seg)
 
 # MAIN LOOP
-
-
-
-
-
 draw_options = pymunk.pygame_util.DrawOptions(screen)
 prev_time = 0
+
 while running:
-
-    keys = pygame.key.get_pressed()
-
-    # EVENTS & PROCCESSING
-    # pygame.QUIT event means the user clicked X to close your window
+    # Event processing
+    keys = pygame.key.get_pressed() # Keep track of what keys are pressed
     for event in pygame.event.get():
-        if keys[pygame.K_UP]:
-                for n in range(len(objects)):
-                    objects[n].body.apply_force_at_local_point((1000, 0), (0, objects[n].size[1]/2))
-                    objects[n].body.apply_force_at_local_point((9000, 0), (0, -objects[n].size[1]/2))
-
         if keys[pygame.K_DOWN]:
-            objects.append(falinks(space, (pygame.mouse.get_pos())))
-
-        if event.type == pygame.QUIT:
-            running = False
+            objects.append(falinks(space, (pygame.mouse.get_pos()), lV=70, rV=100))
         
         if event.type == pygame.MOUSEBUTTONDOWN:
             mazeCheck(maze, pygame.mouse.get_pos())
+            
+        if event.type == pygame.QUIT:
+            running = False
 
-    deltaT = (pygame.time.get_ticks()-prev_time)/1000
-    falinksBehavior(objects, deltaT)
+
+    # Update object physics
+    dT = (pygame.time.get_ticks()/1000-prev_time) # Calculate the difference in time between iterations
+    for n in range(len(objects)):
+        objects[n].behavior(dT) # Pass over dT for updating object behavior / physics
+
+    # GONNA NEED TO DO THAT TIMESTEP THING SINCE ADDING TOO MANY OBJECTS MESSES UP FRAMERATE (& PHYSICS)
 
     # RENDERS
     screen.fill("white") # White background
@@ -320,6 +156,5 @@ while running:
     prev_time = pygame.time.get_ticks()/1000
     space.step(1/60.0)
     clock.tick(60)  # Limits FPS to 60
-    dt = clock.tick(60) / 1000 # Update dt for calculations
 
 pygame.quit()
